@@ -1,9 +1,8 @@
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { ArrowLeft, Send, Copy, Download, Play, GripVertical, MessageCircle, X } from "lucide-react";
+import { ArrowLeft, ArrowUp, Copy, Check, Play, Download, MessageSquare, X, Upload } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import { useLocation, useSearch } from "wouter";
+import { Resizable } from "re-resizable";
 import { connectSSE } from "@/lib/api";
 
 // 从 B站 URL 提取 BV 号
@@ -31,33 +30,59 @@ export default function Workspace() {
   const searchString = useSearch();
   const [videoUrl, setVideoUrl] = useState("");
   const [videoInfo, setVideoInfo] = useState<{ title: string; author: string; duration: string } | null>(null);
-  const [messages, setMessages] = useState<Array<{ role: string; content: string }>>([
-    {
-      role: "system",
-      content: "Mora Agent initialized. Ready to process your video.",
-    },
-  ]);
-  const [inputValue, setInputValue] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
   const [generatedCode, setGeneratedCode] = useState("");
   const [codeOutput, setCodeOutput] = useState("");
   const [thoughtLog, setThoughtLog] = useState<string[]>([]);
-  const [leftWidth, setLeftWidth] = useState(50);
-  const [showChat, setShowChat] = useState(false);
-  const [chatPosition, setChatPosition] = useState({ x: 16, y: 16 });
-  const [chatSize, setChatSize] = useState({ width: 384, height: 512 });
+  const [copied, setCopied] = useState(false);
   
-  const containerRef = useRef<HTMLDivElement>(null);
-  const isDraggingRef = useRef(false);
-  const chatDraggingRef = useRef<{
-    type?: 'move' | 'resize';
-    startX?: number;
-    startY?: number;
-    startWidth?: number;
-    startHeight?: number;
-    startPosX?: number;
-    startPosY?: number;
-  }>({});
+  // Chat state
+  const [showChat, setShowChat] = useState(false);
+  const [chatMessage, setChatMessage] = useState("");
+  const [chatHistory, setChatHistory] = useState<Array<{ role: "user" | "assistant"; content: string }>>([]);
+  const [chatSize, setChatSize] = useState({ width: 400, height: 500 });
+  const [chatPosition, setChatPosition] = useState({ x: 0, y: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+
+  // Left panel width
+  const [leftWidth, setLeftWidth] = useState(450);
+
+  // 保存项目到数据库
+  const saveProject = async () => {
+    try {
+      const title = videoInfo?.title || "Untitled Video";
+      await fetch("http://localhost:8000/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "video-to-code",
+          title: title,
+          input: videoUrl,
+          data: {
+            video_url: videoUrl,
+            video_info: videoInfo,
+            code: generatedCode,
+            output: codeOutput,
+          },
+          userId: "default_user",
+        }),
+      });
+      console.log("[Workspace] 项目已保存");
+    } catch (error) {
+      console.error("[Workspace] 保存项目失败:", error);
+    }
+  };
+
+  // Initialize chat position
+  useEffect(() => {
+    if (showChat && chatPosition.x === 0 && chatPosition.y === 0) {
+      setChatPosition({
+        x: window.innerWidth - chatSize.width - 40,
+        y: window.innerHeight - chatSize.height - 40,
+      });
+    }
+  }, [showChat]);
 
   useEffect(() => {
     const url = localStorage.getItem("videoUrl");
@@ -65,15 +90,13 @@ export default function Workspace() {
       setVideoUrl(url);
     }
 
-    // 从 URL 获取 sessionId
     const params = new URLSearchParams(searchString);
     const sessionId = params.get("session");
-    
+
     if (sessionId) {
       setIsProcessing(true);
       setThoughtLog([]);
-      
-      // 连接 SSE
+
       const disconnect = connectSSE(sessionId, {
         onThought: (content) => {
           console.log("[SSE] thought:", content);
@@ -99,6 +122,9 @@ export default function Workspace() {
           console.log("[SSE] done");
           setIsProcessing(false);
           setThoughtLog((prev) => [...prev, "✓ 处理完成"]);
+          
+          // 保存项目到数据库
+          saveProject();
         },
         onError: (message) => {
           console.error("[SSE] error:", message);
@@ -111,370 +137,399 @@ export default function Workspace() {
     }
   }, [searchString]);
 
-  const handleSendMessage = () => {
-    if (inputValue.trim()) {
-      setMessages([
-        ...messages,
-        { role: "user", content: inputValue },
-        { role: "assistant", content: "Processing your request..." },
-      ]);
-      setInputValue("");
+  const handleCopy = () => {
+    navigator.clipboard.writeText(generatedCode);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleChatSend = () => {
+    if (chatMessage.trim()) {
+      setChatHistory([...chatHistory, { role: "user", content: chatMessage }]);
+      setChatMessage("");
+      // TODO: 实现 chat 功能
+      setTimeout(() => {
+        setChatHistory((prev) => [
+          ...prev,
+          { role: "assistant", content: "Chat 功能即将上线，敬请期待！" },
+        ]);
+      }, 500);
     }
   };
 
-  const handleMouseDown = () => {
-    isDraggingRef.current = true;
-  };
-
-  const handleMouseUp = () => {
-    isDraggingRef.current = false;
-  };
-
-  const handleMouseMove = (e: React.MouseEvent) => {
-    if (!isDraggingRef.current || !containerRef.current) return;
-
-    const container = containerRef.current;
-    const rect = container.getBoundingClientRect();
-    const newLeftWidth = ((e.clientX - rect.left) / rect.width) * 100;
-
-    if (newLeftWidth >= 20 && newLeftWidth <= 80) {
-      setLeftWidth(newLeftWidth);
-    }
-  };
-
+  // Chat dragging
   const handleChatMouseDown = (e: React.MouseEvent) => {
-    if ((e.target as HTMLElement).closest('[data-chat-header]')) {
-      chatDraggingRef.current = {
-        type: 'move',
-        startX: e.clientX,
-        startY: e.clientY,
-        startPosX: chatPosition.x,
-        startPosY: chatPosition.y,
-      };
+    if ((e.target as HTMLElement).closest(".chat-header")) {
+      setIsDragging(true);
+      setDragOffset({
+        x: e.clientX - chatPosition.x,
+        y: e.clientY - chatPosition.y,
+      });
     }
-  };
-
-  const handleChatResizeMouseDown = (e: React.MouseEvent) => {
-    e.preventDefault();
-    chatDraggingRef.current = {
-      type: 'resize',
-      startX: e.clientX,
-      startY: e.clientY,
-      startWidth: chatSize.width,
-      startHeight: chatSize.height,
-    };
   };
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
-      if (chatDraggingRef.current.type === 'move') {
-        const deltaX = e.clientX - (chatDraggingRef.current.startX || 0);
-        const deltaY = e.clientY - (chatDraggingRef.current.startY || 0);
+      if (isDragging) {
         setChatPosition({
-          x: (chatDraggingRef.current.startPosX || 0) + deltaX,
-          y: (chatDraggingRef.current.startPosY || 0) + deltaY,
-        });
-      } else if (chatDraggingRef.current.type === 'resize') {
-        const deltaX = e.clientX - (chatDraggingRef.current.startX || 0);
-        const deltaY = e.clientY - (chatDraggingRef.current.startY || 0);
-        setChatSize({
-          width: Math.max(300, (chatDraggingRef.current.startWidth || 0) + deltaX),
-          height: Math.max(300, (chatDraggingRef.current.startHeight || 0) + deltaY),
+          x: e.clientX - dragOffset.x,
+          y: e.clientY - dragOffset.y,
         });
       }
     };
 
     const handleMouseUp = () => {
-      chatDraggingRef.current = {};
-      isDraggingRef.current = false;
+      setIsDragging(false);
     };
 
-    document.addEventListener("mousemove", handleMouseMove);
-    document.addEventListener("mouseup", handleMouseUp);
+    if (isDragging) {
+      document.addEventListener("mousemove", handleMouseMove);
+      document.addEventListener("mouseup", handleMouseUp);
+    }
+
     return () => {
       document.removeEventListener("mousemove", handleMouseMove);
       document.removeEventListener("mouseup", handleMouseUp);
     };
-  }, [chatPosition, chatSize]);
+  }, [isDragging, dragOffset]);
+
+  // 渲染视频播放器
+  const renderVideoPlayer = () => {
+    if (!videoUrl) {
+      return (
+        <div className="w-full h-full flex flex-col items-center justify-center">
+          <Upload className="w-8 h-8 text-gray-400 mb-2" />
+          <span className="text-sm text-gray-300">No video loaded</span>
+        </div>
+      );
+    }
+
+    // B站
+    if (videoUrl.includes("bilibili.com")) {
+      return (
+        <iframe
+          src={`//player.bilibili.com/player.html?bvid=${extractBvid(videoUrl)}&autoplay=0`}
+          className="w-full h-full"
+          allowFullScreen
+          allow="autoplay; encrypted-media"
+          sandbox="allow-scripts allow-same-origin allow-popups"
+        />
+      );
+    }
+
+    // YouTube
+    if (videoUrl.includes("youtube.com") || videoUrl.includes("youtu.be")) {
+      return (
+        <iframe
+          src={`https://www.youtube.com/embed/${extractYoutubeId(videoUrl)}`}
+          className="w-full h-full"
+          allowFullScreen
+          allow="autoplay; encrypted-media"
+        />
+      );
+    }
+
+    // 其他（抖音等）
+    return (
+      <div className="w-full h-full flex flex-col items-center justify-center">
+        <Play className="w-12 h-12 text-gray-400 mb-4" />
+        <p className="text-sm text-gray-300 mb-2">
+          {videoUrl.includes("douyin.com") ? "抖音视频" : "Video"}
+        </p>
+        <p className="text-xs text-gray-500 mb-4">该平台不支持嵌入播放</p>
+        <a
+          href={videoUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="px-4 py-2 bg-white text-gray-900 text-sm rounded-lg hover:bg-gray-100 transition-colors"
+        >
+          打开原视频 →
+        </a>
+      </div>
+    );
+  };
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col" onMouseMove={handleMouseMove}>
+    <div className="h-screen flex flex-col bg-gray-50">
       {/* Header */}
-      <header className="border-b border-gray-200 bg-white sticky top-0 z-50">
-        <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setLocation("/")}
-              className="hover:bg-gray-100"
-            >
-              <ArrowLeft className="w-4 h-4 mr-2" />
-              Back
-            </Button>
-            <div>
-              <h1 className="font-semibold text-gray-900">
-                {videoInfo?.title || "Video Processing"}
-              </h1>
-              <p className="text-xs text-gray-500 truncate max-w-md">
-                {videoInfo ? `${videoInfo.author} · ${videoInfo.duration}` : videoUrl}
+      <header className="h-14 flex items-center justify-between px-6 border-b border-gray-200 bg-white">
+        <div className="flex items-center gap-4">
+          <button
+            onClick={() => window.history.back()}
+            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+          >
+            <ArrowLeft className="w-5 h-5 text-gray-600" />
+          </button>
+          <img src="/logo.svg" alt="Mora" className="w-6 h-6" />
+          <div>
+            <h1 className="font-semibold text-gray-900">
+              {videoInfo?.title || "Video to Code"}
+            </h1>
+            {videoInfo && (
+              <p className="text-xs text-gray-500">
+                {videoInfo.author} · {videoInfo.duration}
               </p>
-            </div>
+            )}
           </div>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setShowChat(!showChat)}
-              className="hover:bg-gray-100"
-            >
-              <MessageCircle className="w-4 h-4 mr-2" />
-              Chat
-            </Button>
-            <Button variant="outline" size="sm">
-              Export
-            </Button>
-          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setShowChat(!showChat)}
+            className="px-4 py-2 text-sm bg-black text-white rounded-lg hover:bg-gray-800 transition-colors flex items-center gap-2"
+          >
+            <MessageSquare className="w-4 h-4" />
+            Chat
+          </button>
+          <button className="px-4 py-2 text-sm border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors flex items-center gap-2">
+            <Download className="w-4 h-4" />
+            Export
+          </button>
         </div>
       </header>
 
-      {/* Main Workspace - Draggable Split Layout */}
-      <main
-        ref={containerRef}
-        className="flex-1 flex overflow-hidden"
-        onMouseLeave={handleMouseUp}
-      >
-        {/* Left Panel */}
-        <div
-          className="flex flex-col gap-4 p-4 overflow-hidden bg-white"
-          style={{ width: `${leftWidth}%` }}
-        >
-          {/* Video Player */}
-          <Card className="bg-black rounded-lg border border-gray-300 flex-1 overflow-hidden">
-            {videoUrl ? (
-              <div className="w-full h-full">
-                {/* B站视频嵌入 */}
-                {videoUrl.includes('bilibili.com') && (
-                  <iframe
-                    src={`//player.bilibili.com/player.html?bvid=${extractBvid(videoUrl)}&autoplay=0`}
-                    className="w-full h-full"
-                    allowFullScreen
-                    allow="autoplay; encrypted-media"
-                    sandbox="allow-scripts allow-same-origin allow-popups"
-                  />
-                )}
-                {/* YouTube 视频嵌入 */}
-                {(videoUrl.includes('youtube.com') || videoUrl.includes('youtu.be')) && (
-                  <iframe
-                    src={`https://www.youtube.com/embed/${extractYoutubeId(videoUrl)}`}
-                    className="w-full h-full"
-                    allowFullScreen
-                    allow="autoplay; encrypted-media"
-                  />
-                )}
-                {/* 抖音和其他视频：显示跳转链接 */}
-                {!videoUrl.includes('bilibili.com') && 
-                 !videoUrl.includes('youtube.com') && 
-                 !videoUrl.includes('youtu.be') && (
-                  <div className="w-full h-full bg-gradient-to-br from-gray-900 to-black flex flex-col items-center justify-center">
-                    <div className="w-20 h-20 rounded-full bg-purple-600/20 flex items-center justify-center mb-4">
-                      <Play className="w-10 h-10 text-purple-400" />
-                    </div>
-                    <p className="text-sm mb-2 font-semibold text-gray-400">
-                      {videoUrl.includes('douyin.com') ? '抖音视频' : 'Video Player'}
-                    </p>
-                    <p className="text-xs text-gray-500 mb-4 px-4 text-center">
-                      {videoUrl.includes('douyin.com') 
-                        ? '抖音不支持嵌入播放' 
-                        : '该平台不支持嵌入播放'}
-                    </p>
-                    <a 
-                      href={videoUrl} 
-                      target="_blank" 
-                      rel="noopener noreferrer"
-                      className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white text-sm rounded-lg transition-colors"
-                    >
-                      打开原视频 →
-                    </a>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="w-full h-full bg-gradient-to-br from-gray-900 to-black flex flex-col items-center justify-center">
-                <div className="w-20 h-20 rounded-full bg-purple-600/20 flex items-center justify-center mb-4">
-                  <Play className="w-10 h-10 text-purple-400" />
-                </div>
-                <p className="text-sm mb-2 font-semibold text-gray-400">Video Player</p>
-                <p className="text-xs text-gray-500">No video loaded</p>
-              </div>
-            )}
-          </Card>
-
-          {/* Agent Thought Process */}
-          <Card className="bg-white border border-gray-200 flex-1 overflow-hidden flex flex-col p-4">
-            <h3 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
-              <div className="w-2 h-2 rounded-full bg-purple-600 animate-pulse"></div>
-              Agent Thought Process
-            </h3>
-            <div className="flex-1 overflow-y-auto space-y-2 font-mono text-xs">
-              {thoughtLog.length === 0 ? (
-                <p className="text-gray-500">Waiting for processing...</p>
-              ) : (
-                thoughtLog.map((log, idx) => (
-                  <div key={idx} className="text-gray-700">
-                    <span className="text-purple-600">→</span> {log}
-                  </div>
-                ))
-              )}
-            </div>
-          </Card>
-        </div>
-
-        {/* Draggable Divider */}
-        <div
-          onMouseDown={handleMouseDown}
-          className="w-1 bg-gray-200 hover:bg-purple-400 cursor-col-resize transition-colors flex items-center justify-center group"
-        >
-          <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-            <GripVertical className="w-4 h-4 text-purple-400" />
-          </div>
-        </div>
-
-        {/* Right Panel */}
-        <div
-          className="flex flex-col gap-4 p-4 overflow-hidden bg-white"
-          style={{ width: `${100 - leftWidth}%` }}
-        >
-          {/* Generated Code */}
-          <Card className="bg-white border border-gray-200 flex-1 overflow-hidden flex flex-col p-4">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-semibold text-gray-900">Generated Code</h3>
-              <div className="flex gap-2">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => navigator.clipboard.writeText(generatedCode)}
-                  className="hover:bg-gray-100 h-8 w-8 p-0"
-                  title="Copy code"
-                >
-                  <Copy className="w-4 h-4" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="hover:bg-gray-100 h-8 w-8 p-0"
-                  title="Download code"
-                >
-                  <Download className="w-4 h-4" />
-                </Button>
-              </div>
-            </div>
-
-            {generatedCode ? (
-              <div className="flex-1 overflow-y-auto bg-gray-900 rounded-lg p-3 font-mono text-xs text-green-400">
-                <pre className="whitespace-pre-wrap break-words">{generatedCode}</pre>
-              </div>
-            ) : (
-              <div className="flex-1 flex items-center justify-center text-gray-500">
-                <p className="text-sm">Processing video...</p>
-              </div>
-            )}
-          </Card>
-
-          {/* Code Execution Result */}
-          <Card className="bg-white border border-gray-200 flex-1 overflow-hidden flex flex-col p-4">
-            <h3 className="text-sm font-semibold text-gray-900 mb-3">Execution Result</h3>
-            {codeOutput ? (
-              <div className="flex-1 overflow-y-auto bg-gray-900 rounded-lg p-3 font-mono text-xs text-blue-400">
-                <pre className="whitespace-pre-wrap break-words">{codeOutput}</pre>
-              </div>
-            ) : (
-              <div className="flex-1 flex items-center justify-center text-gray-500">
-                <p className="text-sm">Waiting for execution...</p>
-              </div>
-            )}
-          </Card>
-        </div>
-      </main>
-
-      {/* Chat Floating Window */}
-      {showChat && (
-        <div
-          className="fixed bg-white rounded-lg border border-gray-200 shadow-2xl flex flex-col z-40 overflow-hidden group"
-          style={{
-            left: `${chatPosition.x}px`,
-            top: `${chatPosition.y}px`,
-            width: `${chatSize.width}px`,
-            height: `${chatSize.height}px`,
+      {/* Main Content */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Left Side - Video + Thought Process */}
+        <Resizable
+          size={{ width: leftWidth, height: "100%" }}
+          onResizeStop={(e, direction, ref, d) => {
+            setLeftWidth(leftWidth + d.width);
+          }}
+          minWidth={300}
+          maxWidth={800}
+          enable={{ right: true }}
+          handleStyles={{
+            right: {
+              width: "4px",
+              right: "-2px",
+              cursor: "col-resize",
+              backgroundColor: "transparent",
+            },
+          }}
+          handleClasses={{
+            right: "hover:bg-blue-500 transition-colors",
           }}
         >
-          {/* Chat Header - Draggable */}
-          <div
-            data-chat-header="true"
-            onMouseDown={handleChatMouseDown}
-            className="border-b border-gray-200 p-4 flex items-center justify-between bg-gradient-to-r from-purple-600 to-pink-600 cursor-move hover:shadow-lg transition-shadow flex-shrink-0"
-          >
-            <h3 className="font-semibold text-white flex items-center gap-2">
-              <GripVertical className="w-4 h-4" />
-              <MessageCircle className="w-4 h-4" />
-              Chat with Mora
-            </h3>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setShowChat(false)}
-              className="hover:bg-white/20 h-8 w-8 p-0 text-white"
-            >
-              <X className="w-4 h-4" />
-            </Button>
-          </div>
+          <div className="h-full flex flex-col bg-white border-r border-gray-200">
+            {/* Video Section */}
+            <div className="flex-[3] flex flex-col border-b border-gray-200 p-4">
+              <div className="h-10 flex items-center justify-between mb-4">
+                <h2 className="text-sm font-medium text-gray-900">Video Preview</h2>
+                {videoInfo && (
+                  <span className="px-2 py-1 bg-blue-100 text-blue-700 text-xs rounded-md">
+                    {videoInfo.author}
+                  </span>
+                )}
+              </div>
+              <div className="flex-1 bg-gray-900 rounded-3xl overflow-hidden relative">
+                {/* Video Title Overlay */}
+                {videoInfo && (
+                  <div className="absolute top-0 left-0 right-0 bg-gradient-to-b from-black/70 to-transparent p-4 z-10">
+                    <h3 className="text-white text-sm font-medium truncate">{videoInfo.title}</h3>
+                    <p className="text-gray-300 text-xs mt-1">{videoInfo.author}</p>
+                  </div>
+                )}
+                {renderVideoPlayer()}
+              </div>
+            </div>
 
-          {/* Chat Messages */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-gray-50">
-            {messages.map((msg, idx) => (
-              <div
-                key={idx}
-                className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
-              >
-                <div
-                  className={`max-w-xs px-3 py-2 rounded-lg text-sm ${
-                    msg.role === "user"
-                      ? "bg-purple-600 text-white"
-                      : "bg-gray-200 text-gray-900"
-                  }`}
-                >
-                  {msg.content}
+            {/* Agent Thought Process */}
+            <div className="flex-[2] flex flex-col bg-gray-50 p-4">
+              <div className="h-10 flex items-center mb-4">
+                <h2 className="text-sm font-medium text-gray-900">Agent Thought Process</h2>
+              </div>
+              <div className="flex-1 overflow-auto bg-white rounded-2xl p-4">
+                <div className="space-y-2">
+                  {thoughtLog.length === 0 ? (
+                    <p className="text-sm text-gray-400">Waiting for processing...</p>
+                  ) : (
+                    thoughtLog.map((log, idx) => (
+                      <div key={idx} className="flex items-start gap-2 text-sm">
+                        <span className="text-gray-400 select-none">→</span>
+                        <p className={`${
+                          log.includes("✓") ? "text-green-600" : 
+                          log.includes("✗") ? "text-red-600" : 
+                          "text-gray-600"
+                        }`}>{log}</p>
+                      </div>
+                    ))
+                  )}
                 </div>
               </div>
-            ))}
+            </div>
           </div>
+        </Resizable>
 
-          {/* Chat Input */}
-          <div className="border-t border-gray-200 p-3 bg-white flex-shrink-0">
-            <div className="flex gap-2">
-              <Input
-                placeholder="Ask Mora..."
-                value={inputValue}
-                onChange={(e) => setInputValue(e.target.value)}
-                onKeyPress={(e) => e.key === "Enter" && handleSendMessage()}
-                className="flex-1 h-9 text-sm"
-              />
-              <Button
-                onClick={handleSendMessage}
-                size="sm"
-                className="bg-purple-600 hover:bg-purple-700 h-9 w-9 p-0"
-              >
-                <Send className="w-4 h-4" />
-              </Button>
+        {/* Right Side - Code Panels */}
+        <div className="flex-1 flex flex-col bg-gray-50 p-4">
+          {/* Generated Code Panel - Green Theme */}
+          <div className="flex-[3] flex flex-col bg-[#0d1117] rounded-2xl overflow-hidden mb-4 border border-green-900/30">
+            <div className="h-12 border-b border-green-900/30 flex items-center justify-between px-4 bg-[#161b22]">
+              <div className="flex items-center gap-3">
+                <span className="text-sm text-green-400 font-medium">Generated Code</span>
+                <span className="text-xs text-gray-500">main.py</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleCopy}
+                  disabled={!generatedCode}
+                  className="px-3 py-1.5 text-sm text-gray-300 hover:text-white hover:bg-gray-700 rounded-md transition-colors flex items-center gap-2 disabled:opacity-50"
+                >
+                  {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                  {copied ? "Copied" : "Copy"}
+                </button>
+                <button
+                  disabled={!generatedCode}
+                  className="px-3 py-1.5 text-sm bg-green-600 hover:bg-green-700 text-white rounded-md transition-colors flex items-center gap-2 disabled:opacity-50"
+                >
+                  <Play className="w-4 h-4" />
+                  Run
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-auto p-4 font-mono text-sm">
+              {generatedCode ? (
+                <pre className="text-green-300 leading-relaxed whitespace-pre-wrap">
+                  <code>{generatedCode}</code>
+                </pre>
+              ) : (
+                <div className="h-full flex items-center justify-center">
+                  <p className="text-gray-500">
+                    {isProcessing ? "Generating code..." : "No code generated yet"}
+                  </p>
+                </div>
+              )}
             </div>
           </div>
 
-          {/* Resize Handle */}
-          <div
-            onMouseDown={handleChatResizeMouseDown}
-            className="absolute bottom-0 right-0 w-4 h-4 cursor-nwse-resize bg-purple-400/0 hover:bg-purple-400/50 transition-colors opacity-0 group-hover:opacity-100"
-          />
+          {/* Execution Result Panel - Blue Theme */}
+          <div className="flex-[2] flex flex-col bg-[#0d1117] rounded-2xl overflow-hidden border border-blue-900/30">
+            <div className="h-12 border-b border-blue-900/30 flex items-center justify-between px-4 bg-[#161b22]">
+              <span className="text-sm font-medium text-blue-400">Execution Result</span>
+              <div className="flex items-center gap-2">
+                <div className={`w-2 h-2 rounded-full ${codeOutput ? "bg-green-500" : "bg-gray-500"}`} />
+                <span className="text-xs text-gray-400">{codeOutput ? "Success" : "Idle"}</span>
+              </div>
+            </div>
+            <div className="flex-1 overflow-auto p-4 font-mono text-sm">
+              {codeOutput ? (
+                <pre className="text-blue-300 leading-relaxed whitespace-pre-wrap">
+                  <code>{codeOutput}</code>
+                </pre>
+              ) : (
+                <div className="h-full flex items-center justify-center">
+                  <p className="text-sm text-gray-500">
+                    {isProcessing ? "Waiting for execution..." : "No output yet"}
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
+      </div>
+
+      {/* Floating Chat Window */}
+      {showChat && (
+        <Resizable
+          size={chatSize}
+          onResizeStop={(e, direction, ref, d) => {
+            setChatSize({
+              width: chatSize.width + d.width,
+              height: chatSize.height + d.height,
+            });
+          }}
+          minWidth={320}
+          minHeight={400}
+          maxWidth={800}
+          maxHeight={800}
+          style={{
+            position: "fixed",
+            left: chatPosition.x,
+            top: chatPosition.y,
+            zIndex: 1000,
+          }}
+          className="shadow-2xl rounded-lg overflow-hidden"
+        >
+          <div
+            className="h-full flex flex-col bg-white border border-gray-300 rounded-lg"
+            onMouseDown={handleChatMouseDown}
+          >
+            {/* Chat Header */}
+            <div className="chat-header h-12 flex items-center justify-between px-4 border-b border-gray-200 bg-gray-50 cursor-move">
+              <div className="flex items-center gap-2">
+                <MessageSquare className="w-4 h-4 text-gray-600" />
+                <h3 className="text-sm font-medium text-gray-900">Mora</h3>
+              </div>
+              <button
+                onClick={() => setShowChat(false)}
+                className="w-6 h-6 hover:bg-gray-200 rounded flex items-center justify-center transition-colors"
+              >
+                <X className="w-4 h-4 text-gray-600" />
+              </button>
+            </div>
+
+            {/* Chat Messages */}
+            <div className="flex-1 overflow-auto px-4 py-4 bg-white">
+              {chatHistory.length === 0 ? (
+                <div className="h-full flex items-center justify-center">
+                  <div className="text-center text-gray-400 text-sm">
+                    <MessageSquare className="w-8 h-8 mx-auto mb-2 text-gray-300" />
+                    <p>Start a conversation</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {chatHistory.map((msg, index) => (
+                    <div
+                      key={index}
+                      className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+                    >
+                      <div
+                        className={`max-w-[85%] rounded-2xl px-4 py-2.5 ${
+                          msg.role === "user"
+                            ? "bg-black text-white"
+                            : "bg-gray-100 text-gray-900"
+                        }`}
+                      >
+                        <p className="text-sm leading-relaxed">{msg.content}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Chat Input */}
+            <div className="px-4 py-3 border-t border-gray-200 bg-gray-50">
+              <div className="relative bg-white border border-gray-300 rounded-lg focus-within:border-black focus-within:ring-1 focus-within:ring-black transition-all">
+                <textarea
+                  value={chatMessage}
+                  onChange={(e) => setChatMessage(e.target.value)}
+                  onKeyPress={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      handleChatSend();
+                    }
+                  }}
+                  placeholder="Ask me anything..."
+                  rows={2}
+                  className="w-full px-3 py-2 pr-10 bg-transparent resize-none outline-none text-sm text-gray-900 placeholder-gray-400"
+                />
+                <button
+                  onClick={handleChatSend}
+                  disabled={!chatMessage.trim()}
+                  className={`absolute right-2 bottom-2 w-7 h-7 rounded-lg flex items-center justify-center transition-all ${
+                    chatMessage.trim()
+                      ? "bg-black hover:bg-gray-800 text-white"
+                      : "bg-gray-100 text-gray-400 cursor-not-allowed"
+                  }`}
+                >
+                  <ArrowUp className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          </div>
+        </Resizable>
       )}
     </div>
   );

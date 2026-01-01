@@ -1,17 +1,70 @@
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Card } from "@/components/ui/card";
-import { Zap, BookOpen, Share2, FileText, CheckSquare, ArrowRight, Play, Code2, Sparkles } from "lucide-react";
-import { useState } from "react";
+import { ArrowUp, Code2, Zap, Sparkles, FileText, CheckSquare, Plus, Trash2 } from "lucide-react";
+import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { createSession } from "@/lib/api";
+
+// 项目类型
+interface Project {
+  id: string;
+  type: "video-to-code" | "deep-research";
+  title: string;
+  input: string;
+  data: any;
+  created_at: string;
+  updated_at: string;
+}
 
 export default function Home() {
   const [videoUrl, setVideoUrl] = useState("");
   const [selectedFeature, setSelectedFeature] = useState("video-to-code");
   const [isLoading, setIsLoading] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [placeholderText, setPlaceholderText] = useState("");
+  const [projects, setProjects] = useState<Project[]>([]);
   const [, setLocation] = useLocation();
+
+  // 加载项目列表
+  useEffect(() => {
+    fetchProjects();
+  }, []);
+
+  const fetchProjects = async () => {
+    try {
+      const response = await fetch("http://localhost:8000/api/projects?limit=7");
+      const data = await response.json();
+      if (data.success) {
+        setProjects(data.projects);
+      }
+    } catch (error) {
+      console.error("Failed to fetch projects:", error);
+    }
+  };
+
+  // 打字机效果 - 根据选中功能显示不同提示
+  useEffect(() => {
+    const texts: Record<string, string> = {
+      "video-to-code": "Share a video to unlock its digital potential.",
+      "deep-research": "Enter a keyword to explore knowledge graph.",
+    };
+    const fullText = texts[selectedFeature] || texts["video-to-code"];
+    const words = fullText.split(" ");
+    let currentWordIndex = 0;
+    let currentText = "";
+
+    setPlaceholderText(""); // 重置
+
+    const intervalId = setInterval(() => {
+      if (currentWordIndex < words.length) {
+        currentText += (currentWordIndex > 0 ? " " : "") + words[currentWordIndex];
+        setPlaceholderText(currentText);
+        currentWordIndex++;
+      } else {
+        clearInterval(intervalId);
+      }
+    }, 150);
+
+    return () => clearInterval(intervalId);
+  }, [selectedFeature]);
 
   const showToast = (message: string) => {
     setToast(message);
@@ -19,7 +72,7 @@ export default function Home() {
   };
 
   const handleFeatureClick = (featureId: string) => {
-    if (featureId === "video-to-code") {
+    if (featureId === "video-to-code" || featureId === "deep-research") {
       setSelectedFeature(featureId);
     } else {
       showToast("即将上线");
@@ -28,7 +81,14 @@ export default function Home() {
 
   const handleStartClick = async () => {
     if (!videoUrl.trim()) return;
-    
+
+    // Deep Research: 跳转到研究页面
+    if (selectedFeature === "deep-research") {
+      setLocation(`/research?keyword=${encodeURIComponent(videoUrl.trim())}`);
+      return;
+    }
+
+    // Video to Code: 创建 session 并跳转
     if (selectedFeature !== "video-to-code") {
       showToast("即将上线");
       return;
@@ -47,290 +107,259 @@ export default function Home() {
     }
   };
 
+  const handleKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleStartClick();
+    }
+  };
+
+  // 点击项目卡片
+  const handleProjectClick = (project: Project) => {
+    if (project.type === "video-to-code") {
+      // 跳转到 workspace，使用保存的数据
+      const videoUrl = project.data?.video_url || project.input;
+      localStorage.setItem("videoUrl", videoUrl);
+      // 如果有保存的 session，可以恢复；否则创建新的
+      setLocation(`/workspace?projectId=${project.id}`);
+    } else if (project.type === "deep-research") {
+      // 跳转到 research 页面
+      const keyword = project.data?.keyword || project.input;
+      setLocation(`/research?keyword=${encodeURIComponent(keyword)}`);
+    }
+  };
+
+  // 删除项目
+  const handleDeleteProject = async (e: React.MouseEvent, projectId: string) => {
+    e.stopPropagation(); // 阻止触发卡片点击
+    
+    try {
+      const response = await fetch(`http://localhost:8000/api/projects/${projectId}`, {
+        method: "DELETE",
+      });
+      const data = await response.json();
+      if (data.success) {
+        setProjects(projects.filter(p => p.id !== projectId));
+        showToast("项目已删除");
+      }
+    } catch (error) {
+      console.error("Failed to delete project:", error);
+      showToast("删除失败");
+    }
+  };
+
   const features = [
-    {
-      id: "video-to-code",
-      name: "Video to Code",
-      icon: Zap,
-    },
-    {
-      id: "deep-research",
-      name: "Deep Research",
-      icon: BookOpen,
-    },
-    {
-      id: "social-post",
-      name: "Social Post",
-      icon: Share2,
-    },
-    {
-      id: "slides",
-      name: "Slides",
-      icon: FileText,
-    },
-    {
-      id: "todo-list",
-      name: "Todo List",
-      icon: CheckSquare,
-    },
+    { id: "video-to-code", name: "Video to Code", icon: Code2 },
+    { id: "deep-research", name: "Deep Research", icon: Zap },
+    { id: "social-post", name: "Social Post", icon: Sparkles },
+    { id: "slides", name: "Slides", icon: FileText },
+    { id: "todo-list", name: "To do list", icon: CheckSquare },
   ];
-
-  const caseStudies = [
-    {
-      id: 1,
-      title: "Python 爬虫教程",
-      description: "30秒学会网页数据爬取",
-      code: "def scrape_data():\n    return data",
-      tags: ["Coding", "Python"],
-    },
-    {
-      id: 2,
-      title: "Excel 数据处理",
-      description: "自动化数据清洗与分析",
-      code: "df.groupby().sum()",
-      tags: ["Coding", "Data"],
-    },
-    {
-      id: 3,
-      title: "API 集成指南",
-      description: "快速接入第三方服务",
-      code: "requests.get(url)",
-      tags: ["Coding", "API"],
-    },
-    {
-      id: 4,
-      title: "JavaScript 优化",
-      description: "性能提升 50%+ 的技巧",
-      code: "const optimize = () => {}",
-      tags: ["Coding", "Web"],
-    },
-  ];
-
-  const companies = ["OpenAI", "Google", "Meta", "Microsoft", "Anthropic", "Hugging Face"];
 
   return (
-    <div className="min-h-screen bg-white">
+    <div className="h-screen flex flex-col bg-gradient-to-b from-white to-gray-50">
       {/* Header */}
-      <header className="border-b border-gray-200 sticky top-0 z-50 bg-white/80 backdrop-blur-sm">
-        <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-600 to-pink-600 flex items-center justify-center">
-              <Zap className="w-5 h-5 text-white" />
-            </div>
-            <h1 className="text-xl font-bold text-gray-900">Mora</h1>
-          </div>
-          <div className="flex items-center gap-4">
-            <span className="text-sm text-gray-600">English</span>
-            <Button variant="outline" size="sm">Upgrade</Button>
-          </div>
+      <header className="h-16 flex items-center justify-between px-8 bg-white/80 backdrop-blur-md border-b border-gray-100">
+        <div className="flex items-center gap-3">
+          <img src="/logo.svg" alt="Mora" className="w-8 h-8" />
+          <span className="font-semibold text-gray-900 text-lg">Mora</span>
+        </div>
+        <div className="flex items-center gap-3">
+          <button className="px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">
+            Sign In
+          </button>
+          <button className="px-4 py-2 text-sm bg-black text-white rounded-lg hover:bg-gray-800 hover:scale-105 transition-all">
+            Try for Free
+          </button>
         </div>
       </header>
 
-      {/* Hero Section */}
-      <section className="py-20 px-4 bg-gradient-to-b from-white via-purple-50/30 to-white">
-        <div className="max-w-4xl mx-auto text-center mb-16">
-          <div className="inline-block mb-6 px-4 py-2 bg-purple-100 rounded-full">
-            <span className="text-sm font-semibold text-purple-700">✨ Introducing Mora</span>
-          </div>
-          
-          <h2 className="text-6xl font-bold text-gray-900 mb-6 leading-tight">
-            Transform Videos into <span className="bg-gradient-to-r from-purple-600 to-pink-600 bg-clip-text text-transparent">Executable Code</span>
-          </h2>
-          
-          <p className="text-xl text-gray-600 mb-12 max-w-2xl mx-auto">
-            The autonomous agent that watches your coding videos and instantly generates production-ready code. Learn smarter, code faster.
-          </p>
+      {/* Main Content */}
+      <div className="flex-1 overflow-auto">
+        <div className="max-w-5xl mx-auto px-6 py-16">
+          {/* Hero Section */}
+          <div className="text-center mb-16">
+            <h1 className="text-5xl md:text-6xl font-bold text-gray-900 mb-6 leading-tight">
+              Hello, I'm <span className="text-black">Mora</span>
+            </h1>
 
-          {/* Input Section */}
-          <div className="bg-gray-50 rounded-2xl p-8 border border-gray-200 mb-12">
-            <div className="flex gap-3 mb-6">
-              <Input
-                placeholder="Paste your video URL here..."
-                value={videoUrl}
-                onChange={(e) => setVideoUrl(e.target.value)}
-                className="flex-1 h-12 text-base border-gray-300"
-              />
-              <Button
-                onClick={handleStartClick}
-                disabled={!videoUrl.trim() || isLoading}
-                className="h-12 px-8 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white font-semibold"
-              >
-                {isLoading ? "处理中..." : "Start"}
-                {!isLoading && <ArrowRight className="w-4 h-4 ml-2" />}
-              </Button>
-            </div>
+            <p className="text-xl text-gray-600 mb-12 max-w-2xl mx-auto">
+              Transform video content into production-ready code and assets.
+            </p>
 
-            {/* Feature Buttons */}
-            <div className="flex flex-wrap gap-3 justify-center">
-              {features.map((feature) => {
-                const IconComponent = feature.icon;
-                const isSelected = feature.id === selectedFeature;
-                return (
+            {/* Search Box */}
+            <div className="max-w-3xl mx-auto mb-8">
+              <div className="relative group">
+                <div className="absolute -inset-0.5 bg-black rounded-2xl opacity-0 group-hover:opacity-10 blur transition-opacity" />
+                <div className="relative bg-white rounded-2xl shadow-lg border border-gray-200">
+                  <textarea
+                    value={videoUrl}
+                    onChange={(e) => setVideoUrl(e.target.value)}
+                    onKeyPress={handleKeyPress}
+                    placeholder={placeholderText}
+                    rows={1}
+                    className="w-full px-6 py-4 pr-14 bg-transparent resize-none outline-none text-gray-900 placeholder-gray-400"
+                    style={{ minHeight: "60px", maxHeight: "200px" }}
+                  />
                   <button
-                    key={feature.id}
-                    onClick={() => handleFeatureClick(feature.id)}
-                    className={`flex items-center gap-2 px-4 py-2 rounded-full font-medium transition-all ${
-                      isSelected
-                        ? "bg-gradient-to-r from-purple-600 to-pink-600 text-white"
-                        : "bg-white text-gray-700 border border-gray-300 hover:border-gray-400 hover:bg-gray-50"
+                    onClick={handleStartClick}
+                    disabled={!videoUrl.trim() || isLoading}
+                    className={`absolute right-4 bottom-4 w-10 h-10 rounded-xl flex items-center justify-center transition-all ${
+                      videoUrl.trim() && !isLoading
+                        ? "bg-black hover:bg-gray-800 hover:shadow-lg hover:scale-110 text-white"
+                        : "bg-gray-100 text-gray-400 cursor-not-allowed"
                     }`}
                   >
-                    <IconComponent className="w-4 h-4" />
-                    {feature.name}
+                    <ArrowUp className="w-5 h-5" />
                   </button>
-                );
-              })}
+                </div>
+              </div>
             </div>
-          </div>
 
-          {/* Toast */}
-          {toast && (
-            <div className="fixed bottom-8 left-1/2 transform -translate-x-1/2 bg-gray-900 text-white px-4 py-2 rounded-lg text-sm shadow-lg z-50">
-              {toast}
-            </div>
-          )}
-
-          {/* Trust Section */}
-          <div className="text-center">
-            <p className="text-sm text-gray-600 mb-4">Trusted by developers at</p>
-            <div className="flex flex-wrap justify-center gap-6 items-center">
-              {companies.map((company) => (
-                <span key={company} className="text-sm font-semibold text-gray-500 hover:text-gray-700 transition-colors cursor-pointer">
-                  {company}
-                </span>
+            {/* Quick Actions */}
+            <div className="flex flex-wrap justify-center gap-2 mb-4">
+              {features.map((feature) => (
+                <button
+                  key={feature.id}
+                  onClick={() => handleFeatureClick(feature.id)}
+                  className={`group flex items-center gap-2 px-4 py-2.5 rounded-full text-sm transition-all hover:shadow-md hover:scale-105 ${
+                    selectedFeature === feature.id
+                      ? "bg-blue-500 text-white border border-blue-500"
+                      : "bg-white text-gray-700 border border-gray-200 hover:bg-gray-50"
+                  }`}
+                >
+                  <feature.icon
+                    className={`w-4 h-4 transition-colors ${
+                      selectedFeature === feature.id
+                        ? "text-white"
+                        : "text-gray-400 group-hover:text-gray-900"
+                    }`}
+                  />
+                  <span>{feature.name}</span>
+                </button>
               ))}
             </div>
           </div>
-        </div>
-      </section>
 
-      {/* Features Section */}
-      <section className="py-20 px-4 bg-white">
-        <div className="max-w-6xl mx-auto">
-          <h3 className="text-4xl font-bold text-gray-900 mb-16 text-center">
-            Powerful Capabilities
-          </h3>
+          {/* Recent Projects Section */}
+          <div className="mt-16">
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-2xl font-bold text-gray-900">Recent Projects</h2>
+              {projects.length > 0 && (
+                <button className="text-sm text-gray-500 hover:text-gray-700 transition-colors">
+                  View All →
+                </button>
+              )}
+            </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mb-16">
-            {[
-              {
-                icon: Code2,
-                title: "Multi-Language Support",
-                description: "Generate code in Python, JavaScript, Java, Go, Rust, and more.",
-              },
-              {
-                icon: Sparkles,
-                title: "AI-Powered Analysis",
-                description: "Advanced logic extraction and semantic understanding of video content.",
-              },
-              {
-                icon: Play,
-                title: "Real-time Execution",
-                description: "Verify generated code with sandboxed execution and instant feedback.",
-              },
-            ].map((item, idx) => {
-              const Icon = item.icon;
-              return (
-                <Card key={idx} className="p-8 border border-gray-200 hover:border-purple-300 hover:shadow-lg transition-all">
-                  <div className="w-12 h-12 rounded-lg bg-purple-100 flex items-center justify-center mb-6">
-                    <Icon className="w-6 h-6 text-purple-600" />
-                  </div>
-                  <h4 className="text-lg font-semibold text-gray-900 mb-3">{item.title}</h4>
-                  <p className="text-gray-600">{item.description}</p>
-                </Card>
-              );
-            })}
-          </div>
-        </div>
-      </section>
-
-      {/* Creator Build Section */}
-      <section className="py-20 px-4 bg-gray-50">
-        <div className="max-w-6xl mx-auto">
-          <h3 className="text-4xl font-bold text-gray-900 mb-4 text-center">Creator Build</h3>
-          <p className="text-lg text-gray-600 text-center mb-12 max-w-2xl mx-auto">
-            See what developers are creating with Mora
-          </p>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-            {caseStudies.map((caseStudy) => (
-              <Card
-                key={caseStudy.id}
-                className="bg-white border border-gray-200 hover:border-purple-300 hover:shadow-lg transition-all cursor-pointer overflow-hidden group"
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              {/* New Project Card */}
+              <button 
+                onClick={() => setVideoUrl("")}
+                className="aspect-[4/3] bg-gradient-to-br from-gray-50 to-gray-100 rounded-xl border-2 border-dashed border-gray-300 hover:border-gray-400 hover:from-gray-100 hover:to-gray-150 transition-all flex flex-col items-center justify-center gap-3 group"
               >
-                <div className="p-6">
-                  {/* Code Preview */}
-                  <div className="bg-gray-900 rounded-lg p-4 mb-4 font-mono text-xs text-green-400 overflow-hidden h-20 group-hover:h-24 transition-all">
-                    <pre>{caseStudy.code}</pre>
-                  </div>
-
-                  {/* Title & Description */}
-                  <h4 className="font-semibold text-gray-900 mb-2">{caseStudy.title}</h4>
-                  <p className="text-sm text-gray-600 mb-4">{caseStudy.description}</p>
-
-                  {/* Tags */}
-                  <div className="flex gap-2 flex-wrap">
-                    {caseStudy.tags.map((tag) => (
-                      <span
-                        key={tag}
-                        className="text-xs px-2 py-1 bg-purple-100 text-purple-700 rounded-full"
-                      >
-                        {tag}
-                      </span>
-                    ))}
-                  </div>
+                <div className="w-14 h-14 rounded-2xl bg-white shadow-sm group-hover:shadow-md flex items-center justify-center transition-all group-hover:scale-110">
+                  <Plus className="w-7 h-7 text-gray-500 group-hover:text-gray-700" />
                 </div>
-              </Card>
-            ))}
-          </div>
-        </div>
-      </section>
+                <span className="text-sm font-medium text-gray-600 group-hover:text-gray-800">New Project</span>
+              </button>
 
-      {/* Stats Section */}
-      <section className="py-20 px-4 bg-white">
-        <div className="max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-12 text-center">
-          <div>
-            <p className="text-5xl font-bold text-purple-600 mb-3">1000+</p>
-            <p className="text-lg text-gray-600">Videos Processed</p>
-            <p className="text-sm text-gray-500 mt-2">Every day</p>
-          </div>
-          <div>
-            <p className="text-5xl font-bold text-purple-600 mb-3">99.8%</p>
-            <p className="text-lg text-gray-600">Code Success Rate</p>
-            <p className="text-sm text-gray-500 mt-2">Production ready</p>
-          </div>
-          <div>
-            <p className="text-5xl font-bold text-purple-600 mb-3">&lt;30s</p>
-            <p className="text-lg text-gray-600">Average Processing</p>
-            <p className="text-sm text-gray-500 mt-2">Lightning fast</p>
-          </div>
-        </div>
-      </section>
+              {/* Recent Project Cards */}
+              {projects.length > 0 ? (
+                projects.slice(0, 7).map((project) => {
+                  // 优先使用项目保存的封面图片，否则使用默认图片
+                  const bgImage = project.data?.cover_image || 
+                    (project.type === "video-to-code" 
+                      ? "https://images.unsplash.com/photo-1461749280684-dccba630e2f6?w=400&h=300&fit=crop"
+                      : "https://images.unsplash.com/photo-1677442136019-21780ecad995?w=400&h=300&fit=crop");
+                  
+                  return (
+                    <div
+                      key={project.id}
+                      onClick={() => handleProjectClick(project)}
+                      className="aspect-[4/3] rounded-xl overflow-hidden shadow-sm hover:shadow-xl transition-all duration-300 cursor-pointer group border border-gray-200 relative"
+                    >
+                      <div className="h-full flex flex-col">
+                        {/* 项目封面 - 使用真实图片 */}
+                        <div className="flex-1 relative overflow-hidden">
+                          <img 
+                            src={bgImage} 
+                            alt="" 
+                            className="absolute inset-0 w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
+                          />
+                          {/* 渐变遮罩 */}
+                          <div className={`absolute inset-0 ${
+                            project.type === "video-to-code" 
+                              ? "bg-gradient-to-br from-blue-600/80 to-indigo-700/80" 
+                              : "bg-gradient-to-br from-emerald-500/80 to-teal-600/80"
+                          } mix-blend-multiply`} />
+                          
 
-      {/* CTA Section */}
-      <section className="py-20 px-4 bg-gradient-to-r from-purple-600 to-pink-600">
-        <div className="max-w-4xl mx-auto text-center">
-          <h3 className="text-4xl font-bold text-white mb-6">Ready to transform your coding?</h3>
-          <p className="text-xl text-purple-100 mb-8">Start with a free trial. No credit card required.</p>
-          <Button
-            onClick={() => {
-              const input = document.querySelector('input[placeholder="Paste your video URL here..."]') as HTMLInputElement;
-              if (input) input.focus();
-            }}
-            className="bg-white text-purple-600 hover:bg-gray-50 font-semibold px-8 py-3 text-lg"
-          >
-            Get Started Now
-            <ArrowRight className="w-5 h-5 ml-2" />
-          </Button>
+                          
+                          {/* 类型标签 */}
+                          <div className="absolute top-2 left-2">
+                            <span className="px-2 py-0.5 bg-white/20 backdrop-blur-sm rounded-full text-[10px] text-white font-medium">
+                              {project.type === "video-to-code" ? "Video" : "Research"}
+                            </span>
+                          </div>
+                        </div>
+                        
+                        {/* 项目信息 */}
+                        <div className="px-3 py-3 bg-white">
+                          <h3 className="text-sm font-medium text-gray-900 mb-0.5 truncate">
+                            {project.title || "Untitled"}
+                          </h3>
+                          <p className="text-xs text-gray-500">
+                            {new Date(project.updated_at).toLocaleDateString()}
+                          </p>
+                        </div>
+                      </div>
+                      
+                      {/* Delete button */}
+                      <button
+                        onClick={(e) => handleDeleteProject(e, project.id)}
+                        className="absolute top-2 right-2 p-1.5 bg-black/30 backdrop-blur-sm rounded-full opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-500"
+                      >
+                        <Trash2 className="w-3.5 h-3.5 text-white" />
+                      </button>
+                    </div>
+                  );
+                })
+              ) : (
+                // 空状态占位
+                [1, 2, 3].map((i) => (
+                  <div
+                    key={i}
+                    className="aspect-[4/3] bg-gray-50 rounded-lg overflow-hidden border border-gray-200 flex items-center justify-center"
+                  >
+                    <p className="text-xs text-gray-400">No projects yet</p>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
         </div>
-      </section>
+      </div>
 
       {/* Footer */}
-      <footer className="border-t border-gray-200 py-12 px-4 bg-white">
-        <div className="max-w-6xl mx-auto text-center text-gray-600 text-sm">
-          <p>© 2026 Mora. All rights reserved. | Privacy Policy | Terms of Service</p>
+      <div className="border-t border-gray-200 bg-white/80 backdrop-blur-md">
+        <div className="max-w-5xl mx-auto px-6 py-4">
+          <div className="flex items-center justify-between text-sm text-gray-500">
+            <div className="flex items-center gap-6">
+              <button className="hover:text-gray-700 transition-colors">Terms of Service</button>
+              <button className="hover:text-gray-700 transition-colors">Privacy Policy</button>
+              <button className="hover:text-gray-700 transition-colors">Help Center</button>
+            </div>
+          </div>
         </div>
-      </footer>
+      </div>
+
+      {/* Toast */}
+      {toast && (
+        <div className="fixed bottom-8 left-1/2 transform -translate-x-1/2 bg-gray-900 text-white px-4 py-2 rounded-lg text-sm shadow-lg z-50">
+          {toast}
+        </div>
+      )}
     </div>
   );
 }

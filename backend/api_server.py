@@ -30,6 +30,12 @@ from session_manager import session_manager, SessionStatus, VideoInfo, Execution
 from video_processor import process_video
 from code_generator import generate_code
 from sandbox_executor import execute_code
+from research_service import generate_knowledge_graph, get_node_detail, chat_with_node
+from database import (
+    get_recent_projects, get_project, create_project, update_project, delete_project,
+    save_video_to_code_project, save_deep_research_project
+)
+from image_service import generate_project_image
 
 # 加载环境变量
 load_dotenv()
@@ -54,6 +60,32 @@ app.add_middleware(
 # 请求模型
 class CreateSessionRequest(BaseModel):
     videoUrl: str
+
+
+# Deep Research 请求模型
+class GenerateGraphRequest(BaseModel):
+    keyword: str
+
+
+class NodeDetailRequest(BaseModel):
+    label: str
+    context: str = ""
+
+
+class NodeChatRequest(BaseModel):
+    nodeLabel: str
+    nodeDescription: str
+    message: str
+    history: list = []
+
+
+# 项目请求模型
+class SaveProjectRequest(BaseModel):
+    type: str  # 'video-to-code' or 'deep-research'
+    title: str
+    input: str
+    data: dict = {}
+    userId: str = "default_user"
 
 
 # 响应模型
@@ -242,6 +274,152 @@ async def process_session(session_id: str):
         session.add_event("error", {"message": str(e)})
         logger.error(f"[{session_id}] ========== 任务失败 ==========")
         logger.error(f"[{session_id}] 错误: {str(e)}")
+
+
+# ============ Deep Research API ============
+
+@app.post("/api/research/graph")
+async def api_generate_graph(request: GenerateGraphRequest):
+    """生成知识图谱"""
+    logger.info(f"[Research] 生成知识图谱: {request.keyword}")
+    
+    result = await generate_knowledge_graph(request.keyword)
+    
+    if not result.success:
+        logger.error(f"[Research] 图谱生成失败: {result.error}")
+        raise HTTPException(status_code=500, detail=result.error)
+    
+    logger.info(f"[Research] 图谱生成成功: {len(result.nodes)} 节点, {len(result.edges)} 边")
+    
+    return {
+        "success": True,
+        "nodes": result.nodes,
+        "edges": result.edges,
+    }
+
+
+@app.post("/api/research/node/detail")
+async def api_node_detail(request: NodeDetailRequest):
+    """获取节点详情"""
+    logger.info(f"[Research] 获取节点详情: {request.label}")
+    
+    result = await get_node_detail(request.label, request.context)
+    
+    if not result.success:
+        logger.error(f"[Research] 节点详情获取失败: {result.error}")
+        raise HTTPException(status_code=500, detail=result.error)
+    
+    return {
+        "success": True,
+        "label": result.label,
+        "description": result.description,
+        "relatedVideos": result.related_videos,
+    }
+
+
+@app.post("/api/research/chat")
+async def api_node_chat(request: NodeChatRequest):
+    """与节点对话"""
+    logger.info(f"[Research] 与节点对话: {request.nodeLabel}")
+    
+    result = await chat_with_node(
+        node_label=request.nodeLabel,
+        node_description=request.nodeDescription,
+        user_message=request.message,
+        history=request.history,
+    )
+    
+    if not result.success:
+        logger.error(f"[Research] 对话失败: {result.error}")
+        raise HTTPException(status_code=500, detail=result.error)
+    
+    return {
+        "success": True,
+        "content": result.content,
+    }
+
+
+# ============ Projects API ============
+
+@app.get("/api/projects")
+async def api_get_projects(limit: int = 10, userId: str = "default_user"):
+    """获取项目列表"""
+    logger.info(f"[Projects] 获取项目列表: userId={userId}, limit={limit}")
+    
+    try:
+        projects = get_recent_projects(limit=limit)
+        return {
+            "success": True,
+            "projects": projects,
+        }
+    except Exception as e:
+        logger.error(f"[Projects] 获取项目失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/projects/{project_id}")
+async def api_get_project(project_id: str):
+    """获取单个项目"""
+    logger.info(f"[Projects] 获取项目: {project_id}")
+    
+    try:
+        project = get_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        return {
+            "success": True,
+            "project": project,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[Projects] 获取项目失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/projects")
+async def api_create_project(request: SaveProjectRequest):
+    """创建项目"""
+    logger.info(f"[Projects] 创建项目: type={request.type}, title={request.title}")
+    
+    try:
+        # 获取项目封面图片（使用 AI 生成）
+        keyword = request.data.get("keyword", "") if request.data else request.input
+        cover_image = await generate_project_image(keyword, request.type)
+        
+        # 将封面图片添加到 data 中
+        project_data = request.data or {}
+        project_data["cover_image"] = cover_image
+        
+        project = create_project(
+            project_type=request.type,
+            title=request.title,
+            input_content=request.input,
+            data=project_data,
+            user_id=request.userId,
+        )
+        return {
+            "success": True,
+            "project": project,
+        }
+    except Exception as e:
+        logger.error(f"[Projects] 创建项目失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/projects/{project_id}")
+async def api_delete_project(project_id: str):
+    """删除项目"""
+    logger.info(f"[Projects] 删除项目: {project_id}")
+    
+    try:
+        success = delete_project(project_id)
+        return {
+            "success": success,
+        }
+    except Exception as e:
+        logger.error(f"[Projects] 删除项目失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # 启动命令: uvicorn api_server:app --reload --port 8000
